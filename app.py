@@ -44,6 +44,10 @@ if not st.session_state.authenticated:
             label_visibility="collapsed",
         )
         if st.button("Login", width='stretch'):
+            st.write("Secret exists:", "APP_PASSWORD" in st.secrets)
+            st.write("Secret value length:", len(st.secrets.get("APP_PASSWORD", "")))
+            st.write("Input length:", len(pwd))
+            st.write("Match result:", pwd == st.secrets.get("APP_PASSWORD", ""))
             if pwd and pwd == st.secrets["APP_PASSWORD"]:
                 st.session_state.authenticated = True
                 st.rerun()
