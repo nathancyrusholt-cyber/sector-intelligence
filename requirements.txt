@@ -1,0 +1,14 @@
+streamlit
+plotly
+pandas
+yfinance
+requests
+pyyaml
+anthropic
+vaderSentiment
+textblob
+praw
+tweepy
+numpy
+scipy
+scikit-learn
