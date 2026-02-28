@@ -26,10 +26,7 @@ st.set_page_config(
 from fetchers.sector_fetcher import fetch_sector_data, SECTORS
 from fetchers.rotation_fetcher import fetch_rotation_data
 from fetchers.breadth_fetcher import fetch_breadth_data, SECTOR_ETF_NAMES
-from fetchers.sentiment_fetcher import (
-    fetch_news_sentiment, fetch_reddit_sentiment,
-    fetch_twitter_mock, compute_composite_sentiment,
-)
+from fetchers.sentiment_fetcher import fetch_news_sentiment, CROWDED_THRESHOLD
 from fetchers.theme_fetcher import fetch_theme_data, fetch_spy_normalized, THEMES
 
 # ── Session state defaults ────────────────────────────────────────────────────
@@ -70,8 +67,7 @@ with st.sidebar:
 
     # Data source status
     st.markdown("**Data Sources**")
-    news_key_ok = bool(os.environ.get("NEWS_API_KEY"))
-    reddit_ok   = bool(os.environ.get("REDDIT_CLIENT_ID"))
+    news_key_ok  = bool(os.environ.get("NEWS_API_KEY"))
     anthropic_ok = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     def status_dot(ok, label):
@@ -81,7 +77,6 @@ with st.sidebar:
 
     status_dot(True,         "yfinance (free)")
     status_dot(news_key_ok,  "NewsAPI")
-    status_dot(reddit_ok,    "Reddit PRAW")
     status_dot(anthropic_ok, "Claude AI")
     st.markdown("---")
 
@@ -148,12 +143,11 @@ with st.sidebar:
 @st.cache_data(ttl=3600)
 def load_all_fast_data():
     """Load all non-intensive data sources."""
-    sector_df   = fetch_sector_data()
-    rotation    = fetch_rotation_data()
-    news        = fetch_news_sentiment()
-    reddit      = fetch_reddit_sentiment()
-    themes      = fetch_theme_data()
-    return sector_df, rotation, news, reddit, themes
+    sector_df = fetch_sector_data()
+    rotation  = fetch_rotation_data()
+    news      = fetch_news_sentiment()
+    themes    = fetch_theme_data()
+    return sector_df, rotation, news, themes
 
 
 def load_data_with_progress():
@@ -165,20 +159,16 @@ def load_data_with_progress():
             status = st.empty()
 
             status.text("📈 Fetching sector ETF data...")
-            prog.progress(15)
+            prog.progress(20)
             sector_df = fetch_sector_data()
 
             status.text("🔄 Fetching rotation data...")
-            prog.progress(30)
+            prog.progress(40)
             rotation = fetch_rotation_data()
 
             status.text("💬 Fetching news sentiment...")
-            prog.progress(45)
-            news = fetch_news_sentiment()
-
-            status.text("📱 Fetching Reddit sentiment...")
             prog.progress(60)
-            reddit = fetch_reddit_sentiment()
+            news = fetch_news_sentiment()
 
             status.text("🎯 Fetching theme data...")
             prog.progress(80)
@@ -190,16 +180,16 @@ def load_data_with_progress():
 
         placeholder.empty()
         st.session_state.data_loaded = True
-        return sector_df, rotation, news, reddit, themes
+        return sector_df, rotation, news, themes
     else:
         return load_all_fast_data()
 
 
-sector_df, rotation_data, news_data, reddit_data, theme_data = load_data_with_progress()
+sector_df, rotation_data, news_data, theme_data = load_data_with_progress()
 
-spy_row = sector_df[sector_df["Ticker"] == "SPY"].iloc[0] if "SPY" in sector_df["Ticker"].values else {}
+spy_row      = sector_df[sector_df["Ticker"] == "SPY"].iloc[0] if "SPY" in sector_df["Ticker"].values else {}
 sectors_only = sector_df[sector_df["Ticker"] != "SPY"].copy()
-composite_sentiment = compute_composite_sentiment(news_data, reddit_data)
+composite_sentiment = news_data.get("composite_score", 0.0)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -610,15 +600,8 @@ with tab3:
     )
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-    if composite_sentiment > CROWDED_THRESHOLD if hasattr(st, "session_state") else False:
-        st.error("⚠️ **CROWDED TRADE WARNING** — Sentiment is in extreme greed territory. Risk of reversal elevated.")
-
-    try:
-        from fetchers.sentiment_fetcher import CROWDED_THRESHOLD as _CT
-        if composite_sentiment > _CT:
-            st.error("⚠️ **CROWDED TRADE WARNING** — Sentiment in extreme greed. Reversal risk elevated.")
-    except Exception:
-        pass
+    if composite_sentiment > CROWDED_THRESHOLD:
+        st.error("⚠️ **CROWDED TRADE WARNING** — Sentiment in extreme greed. Reversal risk elevated.")
 
     # ── News Sentiment ────────────────────────────────────────────────────────
     st.subheader("News Sentiment — Last 24h")
@@ -671,74 +654,19 @@ with tab3:
         )
         st.plotly_chart(fig_news, use_container_width=True)
 
-    # ── Reddit Sentiment ───────────────────────────────────────────────────────
-    st.subheader("Reddit Sentiment (WSB / Investing / Stocks)")
-
-    if reddit_data.get("error"):
-        st.warning(f"Reddit unavailable: {reddit_data['error']}")
-    elif not reddit_data["ticker_df"].empty:
-        rdf = reddit_data["ticker_df"].head(20)
-
-        # Bubble chart
-        fig_bubble = go.Figure(go.Scatter(
-            x=rdf["Mentions"],
-            y=rdf["Avg Sentiment"],
-            mode="markers+text",
-            text=rdf["Ticker"],
-            textposition="top center",
-            marker=dict(
-                size=rdf["Total Upvotes"].clip(lower=50) / rdf["Total Upvotes"].max() * 50 + 10,
-                color=[GREEN if s > 0.05 else RED if s < -0.05 else YELLOW
-                       for s in rdf["Avg Sentiment"]],
-                opacity=0.8,
-                line=dict(color="white", width=0.5),
-            ),
-            hovertemplate="<b>%{text}</b><br>Mentions: %{x}<br>Sentiment: %{y:.3f}<extra></extra>",
-        ))
-        fig_bubble.add_hline(y=0, line_dash="dash", line_color=GRAY)
-        fig_bubble.update_layout(
-            height=400, title="Reddit Ticker Sentiment Bubble Map",
-            paper_bgcolor=BG, plot_bgcolor=BG,
-            font=dict(color="white"),
-            xaxis=dict(title="Mention Count", showgrid=False),
-            yaxis=dict(title="Avg VADER Score", showgrid=False),
-            margin=dict(l=10, r=10, t=50, b=10),
-        )
-        st.plotly_chart(fig_bubble, use_container_width=True)
-
-        st.dataframe(
-            rdf[["Ticker", "Mentions", "Avg Sentiment", "Total Upvotes", "Signal"]].style
-            .applymap(lambda v: f"color:{GREEN}" if v == "Bullish"
-                      else f"color:{RED}" if v == "Bearish" else f"color:{YELLOW}",
-                      subset=["Signal"]),
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.info("No Reddit data available.")
-
-    # ── X/Twitter Placeholder ──────────────────────────────────────────────────
-    st.subheader("X / Twitter")
-    tw = fetch_twitter_mock()
+    # ── Social Sentiment Placeholder ───────────────────────────────────────────
+    st.subheader("Social Sentiment")
     st.markdown(
-        f"""<div style='background:{CARD};border:1px solid #333;
-        padding:16px;border-radius:8px;margin-bottom:12px'>
-        <b style='color:{YELLOW}'>⚠️ X API Requires Paid Access</b><br>
-        <span style='color:{GRAY};font-size:13px'>{tw['note']}</span><br><br>
-        <b style='color:{TEAL}'>Free Alternative:</b>
-        <span style='color:{GRAY};font-size:13px'> StockTwits API —
-        <code>https://api.stocktwits.com/api/2/streams/symbol/SPY.json</code>
-        — no auth required for public streams.</span>
+        f"""<div style='background:{CARD};border:1px solid #2A3545;
+        padding:24px 28px;border-radius:8px;margin-top:8px'>
+        <div style='font-size:22px;margin-bottom:8px'>🔧</div>
+        <b style='color:{TEAL};font-size:15px'>Social Sentiment Coming Soon</b>
+        <p style='color:{GRAY};font-size:13px;margin-top:8px;margin-bottom:0;line-height:1.7'>
+        Social sentiment data (StockTwits, Reddit, X) will be integrated in a future update.
+        This tab currently shows news sentiment from NewsAPI above.
+        </p>
         </div>""",
         unsafe_allow_html=True,
-    )
-    st.caption("Mock X data (illustrative only):")
-    mock_df = pd.DataFrame(tw["mock_data"])
-    st.dataframe(
-        mock_df.style.applymap(
-            lambda v: f"color:{GREEN}" if v == "Bullish" else f"color:{RED}" if v == "Bearish" else "",
-            subset=["signal"],
-        ),
-        use_container_width=True, hide_index=True,
     )
 
 
