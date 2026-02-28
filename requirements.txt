@@ -12,3 +12,5 @@ tweepy
 numpy
 scipy
 scikit-learn
+lxml
+html5lib
