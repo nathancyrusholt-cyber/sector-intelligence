@@ -7,6 +7,7 @@ NewsAPI key is read from the NEWS_API_KEY environment variable.
 """
 
 import os
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -30,6 +31,16 @@ NEWS_QUERIES      = ["stock market", "S&P 500", "sector rotation", "Fed", "earni
 STOCKTWITS_TICKERS = ["SPY", "QQQ", "XLK", "XLE", "XLB", "NVDA", "BTC.X", "ETH.X"]
 STOCKTWITS_BASE    = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 
+# Google News RSS — fallback when NewsAPI returns 401/426 (cloud environment restrictions)
+_GNEWS_RSS = "https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
+_RSS_QUERY_MAP = {
+    "stock market":   "stock+market",
+    "S&P 500":        "S%26P+500",
+    "sector rotation": "sector+rotation",
+    "Fed":            "Federal+Reserve+interest+rates",
+    "earnings":       "earnings+season",
+}
+
 # StockTwits note:
 # Their API now requires a free access token even for public read-only streams.
 # Register at https://api.stocktwits.com/developers/apps/new (free, instant).
@@ -43,25 +54,95 @@ STOCKTWITS_AUTH_NOTE = (
 _vader = SentimentIntensityAnalyzer()
 
 
+# ── Google News RSS ────────────────────────────────────────────────────────────
+
+def _fetch_google_news_rss(query: str) -> list:
+    """
+    Fetch Google News RSS for a query and VADER-score each item.
+    No API key required — used as fallback when NewsAPI is unavailable.
+    Returns list of article dicts in the same format as the NewsAPI path.
+    """
+    q_term = _RSS_QUERY_MAP.get(query, query)
+    url = _GNEWS_RSS.format(q=requests.utils.quote(q_term))
+    try:
+        resp = requests.get(
+            url, timeout=10,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; sector-intelligence/1.0)"},
+        )
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+        articles = []
+        for item in root.findall(".//item"):
+            title = (item.findtext("title") or "").strip()
+            desc  = (item.findtext("description") or "").strip()
+            link  = (item.findtext("link") or "").strip()
+            pub   = (item.findtext("pubDate") or "").strip()
+            score = _vader.polarity_scores(f"{title} {desc}")["compound"]
+            if title:
+                articles.append({
+                    "query": query, "headline": title,
+                    "score": score, "url": link, "published": pub,
+                })
+        print(f"[RSS] query='{query}' → {len(articles)} items")
+        return articles
+    except Exception as exc:
+        print(f"[RSS] EXCEPTION for query='{query}': {exc}")
+        return []
+
+
 # ── News Sentiment ─────────────────────────────────────────────────────────────
 
 @_cache(ttl=3600)
 def fetch_news_sentiment() -> dict:
     """
     Pulls last-24h headlines from NewsAPI and scores with VADER.
+    Falls back to Google News RSS on 401/426 (cloud environment restrictions).
     Returns avg score, headline count, best/worst headline, per-query breakdown.
-    Falls back to empty result if NEWS_API_KEY is missing.
-    """
-    if not NEWS_API_KEY:
-        return _empty_news_result(reason="NEWS_API_KEY not set")
 
-    results_by_query = {}
-    all_scores = []
-    all_articles = []
+    Debug behaviour:
+    - Missing key       → st.warning + placeholder data
+    - 401/426 from API  → st.info + Google News RSS fallback (no key needed)
+    - Other API error   → prints full response + st.warning + skips query
+    - Success           → prints first headline fetched to confirm data flow
+    """
+    # ── 1. Key check ──────────────────────────────────────────────────────────
+    key = os.environ.get("NEWS_API_KEY", "").strip()
+    print(f"[NewsAPI] KEY present: {bool(key)} | value prefix: {key[:6] + '…' if key else 'EMPTY'}")
+
+    if not key:
+        msg = "NewsAPI key not configured — showing placeholder data"
+        print(f"[NewsAPI] WARNING: {msg}")
+        try:
+            import streamlit as _st
+            _st.warning(f"⚠️ {msg}")
+        except Exception:
+            pass
+        return _placeholder_news_result(reason=msg)
+
+    # ── 2. Fetch headlines per query ──────────────────────────────────────────
+    results_by_query      = {}
+    all_scores            = []
+    all_articles          = []
+    first_headline_logged = False
+    use_rss_fallback      = False   # flipped True on first 401/426 from NewsAPI
 
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for query in NEWS_QUERIES:
+
+        # ── RSS path (triggered for all remaining queries after first 401/426) ─
+        if use_rss_fallback:
+            rss_arts = _fetch_google_news_rss(query)
+            scores   = [a["score"] for a in rss_arts]
+            all_scores.extend(scores)
+            all_articles.extend(rss_arts)
+            avg = sum(scores) / len(scores) if scores else 0.0
+            results_by_query[query] = {
+                "avg_score": round(avg, 3), "count": len(scores), "source": "rss",
+            }
+            continue
+
+        # ── NewsAPI path ───────────────────────────────────────────────────────
         url = (
             "https://newsapi.org/v2/everything"
             f"?q={requests.utils.quote(query)}"
@@ -69,59 +150,149 @@ def fetch_news_sentiment() -> dict:
             "&language=en"
             "&sortBy=publishedAt"
             "&pageSize=20"
-            f"&apiKey={NEWS_API_KEY}"
+            f"&apiKey={key}"
         )
         try:
             resp = requests.get(url, timeout=10)
+
+            if not resp.ok:
+                print(f"[NewsAPI] ERROR for query='{query}' | status={resp.status_code}")
+                print(f"[NewsAPI] Response body: {resp.text[:500]}")
+
+                # 401 (bad key) or 426 (cloud tier restriction) → switch to RSS
+                if resp.status_code in (401, 426):
+                    print(
+                        f"[NewsAPI] HTTP {resp.status_code} — "
+                        "switching all remaining queries to Google News RSS fallback"
+                    )
+                    use_rss_fallback = True
+                    try:
+                        import streamlit as _st
+                        _st.info(
+                            f"ℹ️ NewsAPI unavailable in this environment "
+                            f"(HTTP {resp.status_code}) — using Google News RSS instead"
+                        )
+                    except Exception:
+                        pass
+                    # Process the current query via RSS immediately
+                    rss_arts = _fetch_google_news_rss(query)
+                    scores   = [a["score"] for a in rss_arts]
+                    all_scores.extend(scores)
+                    all_articles.extend(rss_arts)
+                    avg = sum(scores) / len(scores) if scores else 0.0
+                    results_by_query[query] = {
+                        "avg_score": round(avg, 3), "count": len(scores), "source": "rss",
+                    }
+                    continue
+
+                # Other HTTP error — log and skip
+                try:
+                    import streamlit as _st
+                    err_json = resp.json()
+                    _st.warning(
+                        f"⚠️ NewsAPI error ({resp.status_code}): "
+                        f"{err_json.get('message', resp.text[:200])}"
+                    )
+                except Exception:
+                    pass
+                results_by_query[query] = {
+                    "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+                    "avg_score": 0.0, "count": 0,
+                }
+                continue
+
             resp.raise_for_status()
             articles = resp.json().get("articles", [])
+
         except Exception as e:
+            print(f"[NewsAPI] EXCEPTION for query='{query}': {e}")
             results_by_query[query] = {"error": str(e), "avg_score": 0.0, "count": 0}
             continue
 
         scores = []
         for art in articles:
-            text = f"{art.get('title', '')} {art.get('description', '') or ''}"
+            title = art.get("title", "") or ""
+            desc  = art.get("description", "") or ""
+            text  = f"{title} {desc}"
             score = _vader.polarity_scores(text)["compound"]
             scores.append(score)
             all_scores.append(score)
             all_articles.append({
                 "query":     query,
-                "headline":  art.get("title", ""),
+                "headline":  title,
                 "score":     score,
                 "url":       art.get("url", ""),
                 "published": art.get("publishedAt", ""),
             })
 
+            # ── Debug: print first headline to confirm data is flowing ────────
+            if not first_headline_logged and title:
+                print(f"[NewsAPI] First headline fetched: '{title[:80]}' (score={score:.3f})")
+                first_headline_logged = True
+
         avg = sum(scores) / len(scores) if scores else 0.0
         results_by_query[query] = {"avg_score": round(avg, 3), "count": len(scores)}
+        print(f"[NewsAPI] query='{query}' → {len(scores)} articles, avg_score={avg:.3f}")
 
-    composite = sum(all_scores) / len(all_scores) if all_scores else 0.0
-    best  = max(all_articles, key=lambda x: x["score"], default=None)
-    worst = min(all_articles, key=lambda x: x["score"], default=None)
+    # ── 3. Aggregate ──────────────────────────────────────────────────────────
+    composite   = sum(all_scores) / len(all_scores) if all_scores else 0.0
+    best        = max(all_articles, key=lambda x: x["score"], default=None)
+    worst       = min(all_articles, key=lambda x: x["score"], default=None)
+    source_note = "rss" if use_rss_fallback else "newsapi"
+
+    print(f"[{source_note.upper()}] Total articles: {len(all_articles)} | Composite score: {composite:.3f}")
 
     return {
-        "composite_score":      round(composite, 3),
-        "total_articles":       len(all_articles),
+        "composite_score":       round(composite, 3),
+        "total_articles":        len(all_articles),
         "crowded_trade_warning": composite > CROWDED_THRESHOLD,
-        "best_headline":        best,
-        "worst_headline":       worst,
-        "by_query":             results_by_query,
-        "all_articles":         all_articles,
-        "error":                None,
+        "best_headline":         best,
+        "worst_headline":        worst,
+        "by_query":              results_by_query,
+        "all_articles":          all_articles,
+        "error":                 None,
+        "source":                source_note,
     }
 
 
 def _empty_news_result(reason: str) -> dict:
     return {
-        "composite_score":      0.0,
-        "total_articles":       0,
+        "composite_score":       0.0,
+        "total_articles":        0,
         "crowded_trade_warning": False,
-        "best_headline":        None,
-        "worst_headline":       None,
-        "by_query":             {},
-        "all_articles":         [],
-        "error":                reason,
+        "best_headline":         None,
+        "worst_headline":        None,
+        "by_query":              {},
+        "all_articles":          [],
+        "error":                 reason,
+    }
+
+
+def _placeholder_news_result(reason: str) -> dict:
+    """Returns illustrative placeholder data when NEWS_API_KEY is not configured."""
+    placeholder_articles = [
+        {"query": "stock market", "headline": "Markets rally as Fed signals pause",
+         "score": 0.45, "url": "", "published": ""},
+        {"query": "S&P 500",      "headline": "S&P 500 holds support at 200-day MA",
+         "score": 0.12, "url": "", "published": ""},
+        {"query": "Fed",          "headline": "Fed minutes show divided committee on rate path",
+         "score": -0.08, "url": "", "published": ""},
+        {"query": "earnings",     "headline": "Earnings season beats expectations broadly",
+         "score": 0.55, "url": "", "published": ""},
+        {"query": "sector rotation", "headline": "Defensive sectors outperform as growth fades",
+         "score": -0.15, "url": "", "published": ""},
+    ]
+    composite = sum(a["score"] for a in placeholder_articles) / len(placeholder_articles)
+    return {
+        "composite_score":       round(composite, 3),
+        "total_articles":        len(placeholder_articles),
+        "crowded_trade_warning": False,
+        "best_headline":         max(placeholder_articles, key=lambda x: x["score"]),
+        "worst_headline":        min(placeholder_articles, key=lambda x: x["score"]),
+        "by_query":              {q: {"avg_score": 0.0, "count": 1} for q in NEWS_QUERIES},
+        "all_articles":          placeholder_articles,
+        "error":                 reason,
+        "is_placeholder":        True,
     }
 
 
