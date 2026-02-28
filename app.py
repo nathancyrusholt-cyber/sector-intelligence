@@ -22,6 +22,32 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Auth gate ─────────────────────────────────────────────────────────────────
+# Must come before any data loading or UI rendering.
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    _, col, _ = st.columns([1, 1.2, 1])
+    with col:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("## 📊 Market Sector Intelligence")
+        st.markdown("---")
+        pwd = st.text_input(
+            "Password",
+            type="password",
+            placeholder="Enter password",
+            label_visibility="collapsed",
+        )
+        if st.button("Login", width='stretch'):
+            correct = st.secrets.get("APP_PASSWORD", "")
+            if pwd and pwd == correct:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+    st.stop()
+
 # ── Imports (lazy, with error feedback) ──────────────────────────────────────
 from fetchers.sector_fetcher import fetch_sector_data, SECTORS
 from fetchers.rotation_fetcher import fetch_rotation_data
