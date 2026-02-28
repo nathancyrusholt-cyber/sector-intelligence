@@ -29,13 +29,95 @@ SECTOR_ETF_NAMES = {
 }
 
 
+# 50-ticker fallback covering all 11 GICS sectors — used when Wikipedia is unavailable
+_SP500_FALLBACK = pd.DataFrame([
+    # Materials
+    ("LIN",  "Linde",                    "Materials"),
+    ("APD",  "Air Products",             "Materials"),
+    ("SHW",  "Sherwin-Williams",         "Materials"),
+    ("ECL",  "Ecolab",                   "Materials"),
+    # Energy
+    ("XOM",  "Exxon Mobil",             "Energy"),
+    ("CVX",  "Chevron",                  "Energy"),
+    ("COP",  "ConocoPhillips",           "Energy"),
+    ("SLB",  "Schlumberger",             "Energy"),
+    # Financials
+    ("JPM",  "JPMorgan Chase",           "Financials"),
+    ("BAC",  "Bank of America",          "Financials"),
+    ("WFC",  "Wells Fargo",              "Financials"),
+    ("GS",   "Goldman Sachs",            "Financials"),
+    ("BLK",  "BlackRock",               "Financials"),
+    # Healthcare
+    ("JNJ",  "Johnson & Johnson",        "Health Care"),
+    ("UNH",  "UnitedHealth",             "Health Care"),
+    ("LLY",  "Eli Lilly",               "Health Care"),
+    ("ABBV", "AbbVie",                   "Health Care"),
+    ("MRK",  "Merck",                    "Health Care"),
+    # Industrials
+    ("GE",   "GE Aerospace",            "Industrials"),
+    ("CAT",  "Caterpillar",             "Industrials"),
+    ("HON",  "Honeywell",               "Industrials"),
+    ("UPS",  "United Parcel Service",   "Industrials"),
+    ("RTX",  "RTX Corp",                "Industrials"),
+    # Technology
+    ("AAPL", "Apple",                    "Information Technology"),
+    ("MSFT", "Microsoft",               "Information Technology"),
+    ("NVDA", "NVIDIA",                  "Information Technology"),
+    ("AVGO", "Broadcom",                "Information Technology"),
+    ("AMD",  "AMD",                      "Information Technology"),
+    # Consumer Staples
+    ("PG",   "Procter & Gamble",        "Consumer Staples"),
+    ("KO",   "Coca-Cola",               "Consumer Staples"),
+    ("PEP",  "PepsiCo",                 "Consumer Staples"),
+    ("COST", "Costco",                  "Consumer Staples"),
+    # Real Estate
+    ("PLD",  "Prologis",                "Real Estate"),
+    ("AMT",  "American Tower",          "Real Estate"),
+    ("EQIX", "Equinix",                 "Real Estate"),
+    ("SPG",  "Simon Property",          "Real Estate"),
+    # Utilities
+    ("NEE",  "NextEra Energy",          "Utilities"),
+    ("DUK",  "Duke Energy",             "Utilities"),
+    ("SO",   "Southern Co",             "Utilities"),
+    ("AEP",  "American Electric",       "Utilities"),
+    # Consumer Discretionary
+    ("AMZN", "Amazon",                  "Consumer Discretionary"),
+    ("TSLA", "Tesla",                   "Consumer Discretionary"),
+    ("HD",   "Home Depot",              "Consumer Discretionary"),
+    ("MCD",  "McDonald's",              "Consumer Discretionary"),
+    # Communication Services
+    ("META", "Meta Platforms",          "Communication Services"),
+    ("GOOGL","Alphabet",                "Communication Services"),
+    ("NFLX", "Netflix",                 "Communication Services"),
+    ("DIS",  "Walt Disney",             "Communication Services"),
+    ("T",    "AT&T",                    "Communication Services"),
+], columns=["Symbol", "Security", "GICS Sector"])
+
+
 def _get_sp500_constituents() -> pd.DataFrame:
-    """Fetch S&P 500 constituent list from Wikipedia."""
+    """
+    Fetch S&P 500 constituent list from Wikipedia.
+    Uses a proper User-Agent to avoid 403 blocks on Streamlit Cloud.
+    Falls back to a hardcoded 50-ticker representative sample if the
+    request fails for any reason.
+    """
+    import requests
+
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tables = pd.read_html(url)
-    df = tables[0][["Symbol", "Security", "GICS Sector"]]
-    df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
-    return df
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; sector-intelligence/1.0)"}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(resp.content)
+        df = tables[0][["Symbol", "Security", "GICS Sector"]]
+        df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
+        return df
+    except Exception:
+        # Signal to fetch_breadth_data() that fallback is in use
+        fallback = _SP500_FALLBACK.copy()
+        fallback["_fallback"] = True
+        return fallback
 
 
 @_cache(ttl=14400)  # 4-hour TTL — intensive fetch
@@ -51,6 +133,17 @@ def fetch_breadth_data() -> dict:
     """
     # ── 1. S&P 500 constituents ──────────────────────────────────────────────
     constituents = _get_sp500_constituents()
+    using_fallback = "_fallback" in constituents.columns
+    if using_fallback:
+        constituents = constituents.drop(columns=["_fallback"])
+        try:
+            import streamlit as _st
+            _st.warning(
+                "⚠️ Wikipedia S&P 500 list unavailable (blocked). "
+                "Breadth calculations are based on a representative 50-stock sample across all 11 sectors."
+            )
+        except Exception:
+            pass
     tickers = constituents["Symbol"].tolist()
 
     # Download 260 days to compute 200MA + 60-day breadth history
