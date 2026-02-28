@@ -28,6 +28,10 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
+    if "APP_PASSWORD" not in st.secrets:
+        st.error("APP_PASSWORD secret not configured")
+        st.stop()
+
     _, col, _ = st.columns([1, 1.2, 1])
     with col:
         st.markdown("<br><br>", unsafe_allow_html=True)
@@ -40,8 +44,7 @@ if not st.session_state.authenticated:
             label_visibility="collapsed",
         )
         if st.button("Login", width='stretch'):
-            correct = st.secrets.get("APP_PASSWORD", "")
-            if pwd and pwd == correct:
+            if pwd and pwd == st.secrets["APP_PASSWORD"]:
                 st.session_state.authenticated = True
                 st.rerun()
             else:
