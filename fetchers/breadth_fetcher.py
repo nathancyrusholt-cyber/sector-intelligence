@@ -110,7 +110,7 @@ def _get_sp500_constituents() -> pd.DataFrame:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         tables = pd.read_html(resp.content)
-        df = tables[0][["Symbol", "Security", "GICS Sector"]]
+        df = tables[0][["Symbol", "Security", "GICS Sector"]].copy()
         df["Symbol"] = df["Symbol"].str.replace(".", "-", regex=False)
         return df
     except Exception:

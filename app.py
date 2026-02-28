@@ -82,7 +82,7 @@ with st.sidebar:
 
     # Refresh controls
     st.markdown("**Refresh**")
-    if st.button("🔄 Refresh All Data", use_container_width=True):
+    if st.button("🔄 Refresh All Data", width='stretch'):
         st.cache_data.clear()
         st.session_state.last_refresh = time.time()
         st.rerun()
@@ -101,7 +101,7 @@ with st.sidebar:
 
     # CSV export
     st.markdown("**Export**")
-    if st.button("📥 Export Sector Data as CSV", use_container_width=True):
+    if st.button("📥 Export Sector Data as CSV", width='stretch'):
         try:
             df = fetch_sector_data()
             csv = df.to_csv(index=False)
@@ -110,7 +110,7 @@ with st.sidebar:
                 data=csv,
                 file_name=f"sector_data_{datetime.today().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width='stretch',
             )
         except Exception as e:
             st.error(f"Export failed: {e}")
@@ -123,7 +123,7 @@ with st.sidebar:
     if briefing_disabled:
         st.caption("Set ANTHROPIC_API_KEY to enable")
 
-    if st.button("✨ Get AI Briefing", use_container_width=True, disabled=briefing_disabled):
+    if st.button("✨ Get AI Briefing", width='stretch', disabled=briefing_disabled):
         st.session_state.ai_briefing = None
         st.session_state.ai_briefing_time = None
         st.session_state.ai_briefing_requested = True
@@ -211,7 +211,7 @@ st.markdown(
 try:
     import yfinance as yf
     vix_data = yf.download("^VIX", period="2d", progress=False)
-    vix_level = round(float(vix_data["Close"].iloc[-1]), 2)
+    vix_level = round(float(vix_data["Close"].iloc[0]), 2)
 except Exception:
     vix_level = None
 
@@ -315,7 +315,7 @@ with tab1:
     heatmap_fig = _sector_fig()
     heatmap_event = st.plotly_chart(
         heatmap_fig,
-        use_container_width=True,
+        width='stretch',
         on_select="rerun",
         selection_mode="points",
         key="sector_heatmap",
@@ -359,10 +359,10 @@ with tab1:
             "3M %": "{:+.2f}%", "vs 200MA %": "{:+.2f}%",
             "RSI (14)": "{:.1f}", "Vol Ratio": "{:.2f}x",
         })
-        .applymap(lambda v: f"color: {GREEN}" if isinstance(v, (int, float)) and v > 0
-                  else f"color: {RED}" if isinstance(v, (int, float)) and v < 0 else "",
-                  subset=["YTD %", "1M %", "3M %", "vs 200MA %"]),
-        use_container_width=True,
+        .map(lambda v: f"color: {GREEN}" if isinstance(v, (int, float)) and v > 0
+             else f"color: {RED}" if isinstance(v, (int, float)) and v < 0 else "",
+             subset=["YTD %", "1M %", "3M %", "vs 200MA %"]),
+        width='stretch',
         hide_index=True,
     )
 
@@ -443,7 +443,7 @@ with tab2:
         xaxis=dict(showgrid=False),
         margin=dict(l=10, r=10, t=30, b=10),
     )
-    st.plotly_chart(fig_rot, use_container_width=True)
+    st.plotly_chart(fig_rot, width='stretch')
 
     # ── Sector Rotation Wheel ─────────────────────────────────────────────────
     st.subheader("Sector Momentum Radar (3-Month)")
@@ -474,7 +474,7 @@ with tab2:
         height=380,
         margin=dict(l=40, r=40, t=40, b=40),
     )
-    st.plotly_chart(fig_radar, use_container_width=True)
+    st.plotly_chart(fig_radar, width='stretch')
 
     # ── Rolling Correlation Heatmap ───────────────────────────────────────────
     st.subheader("60-Day Sector Correlation Matrix")
@@ -509,7 +509,7 @@ with tab2:
         margin=dict(l=10, r=10, t=10, b=10),
         xaxis=dict(tickangle=-45),
     )
-    st.plotly_chart(fig_corr, use_container_width=True)
+    st.plotly_chart(fig_corr, width='stretch')
 
     # ── Market Breadth ────────────────────────────────────────────────────────
     st.subheader("Market Breadth — S&P 500")
@@ -563,7 +563,7 @@ with tab2:
         yaxis=dict(showgrid=False),
         margin=dict(l=10, r=60, t=10, b=30),
     )
-    st.plotly_chart(fig_breadth, use_container_width=True)
+    st.plotly_chart(fig_breadth, width='stretch')
 
     st.caption("🔴 Red = Overbought (Z > +2σ from 60-day mean)  |  🟢 Green = Oversold Opportunity (Z < −2σ)")
 
@@ -598,7 +598,7 @@ with tab3:
         height=300, paper_bgcolor=BG, font=dict(color="white"),
         margin=dict(l=20, r=20, t=40, b=20),
     )
-    st.plotly_chart(fig_gauge, use_container_width=True)
+    st.plotly_chart(fig_gauge, width='stretch')
 
     if composite_sentiment > CROWDED_THRESHOLD:
         st.error("⚠️ **CROWDED TRADE WARNING** — Sentiment in extreme greed. Reversal risk elevated.")
@@ -652,7 +652,7 @@ with tab3:
             xaxis=dict(showgrid=False),
             margin=dict(l=10, r=10, t=40, b=10),
         )
-        st.plotly_chart(fig_news, use_container_width=True)
+        st.plotly_chart(fig_news, width='stretch')
 
     # ── Social Sentiment Placeholder ───────────────────────────────────────────
     st.subheader("Social Sentiment")
@@ -698,7 +698,7 @@ with tab4:
                 </div>""",
                 unsafe_allow_html=True,
             )
-            if st.button(f"Select", key=f"theme_{i}", use_container_width=True):
+            if st.button(f"Select", key=f"theme_{i}", width='stretch'):
                 st.session_state.selected_theme = tname
                 st.rerun()
 
@@ -737,7 +737,7 @@ with tab4:
                 xaxis=dict(showgrid=False),
                 margin=dict(l=10, r=10, t=50, b=10),
             )
-            st.plotly_chart(fig_perf, use_container_width=True)
+            st.plotly_chart(fig_perf, width='stretch')
         except Exception as e:
             st.warning(f"Could not render performance chart: {e}")
     else:
@@ -759,8 +759,8 @@ with tab4:
         st.dataframe(
             active_df.style
             .format(fmt_cols)
-            .applymap(color_ytd, subset=[c for c in ["YTD %", "3M %"] if c in active_df.columns]),
-            use_container_width=True,
+            .map(color_ytd, subset=[c for c in ["YTD %", "3M %"] if c in active_df.columns]),
+            width='stretch',
             hide_index=True,
         )
     else:
@@ -789,7 +789,7 @@ with tab4:
         xaxis=dict(showgrid=False),
         margin=dict(l=10, r=10, t=20, b=10),
     )
-    st.plotly_chart(fig_comp, use_container_width=True)
+    st.plotly_chart(fig_comp, width='stretch')
 
 
 # ═════════════════════════════════════════════════════════════════════════════
